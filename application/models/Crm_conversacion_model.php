@@ -369,20 +369,26 @@ class Crm_conversacion_model extends CI_Model
      * Busca una conversación reciente del mismo teléfono (mejora #2).
      * Devuelve la fila más reciente con ultimo_mensaje_at >= ahora-24h, o NULL.
      */
+      /**
+     * Busca una conversación reciente del mismo teléfono.
+     * Si $horas es NULL, busca sin límite de tiempo.
+     */
     public function obtener_reciente_por_telefono($telefono, $horas = 24)
     {
         $telefono = trim((string)$telefono);
         if ($telefono === '') return NULL;
 
-        $desde = date('Y-m-d H:i:s', time() - ((int)$horas * 3600));
+        $this->db->where('telefono', $telefono);
+        $this->db->where('estado !=', 'cerrada');
 
-        return $this->db
-            ->where('telefono', $telefono)
-            ->where('ultimo_mensaje_at >=', $desde)
-            ->where('estado !=', 'cerrada')
-            ->order_by('ultimo_mensaje_at', 'DESC')
-            ->limit(1)
-            ->get($this->tabla)
-            ->row_array();
+        if ($horas !== NULL) {
+            $desde = date('Y-m-d H:i:s', time() - ((int)$horas * 3600));
+            $this->db->where('ultimo_mensaje_at >=', $desde);
+        }
+
+        return $this->db->order_by('ultimo_mensaje_at', 'DESC')
+                        ->limit(1)
+                        ->get($this->tabla)
+                        ->row_array();
     }
 }

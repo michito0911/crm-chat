@@ -21,8 +21,8 @@ $this->load->view('crm/partials/head', array('titulo' => $titulo, 'body_class' =
       </div>
     <?php endif; ?>
 
-<form method="post" action="<?= site_url('chat/iniciar') ?>" autocomplete="off" novalidate>
-  <input type="hidden" name="<?= crm_esc($csrf['csrf_name']) ?>" value="<?= crm_esc($csrf['csrf_hash']) ?>">
+    <form method="post" action="<?= site_url('chat/iniciar') ?>" autocomplete="off" novalidate>
+      <input type="hidden" name="<?= crm_esc($csrf['csrf_name']) ?>" value="<?= crm_esc($csrf['csrf_hash']) ?>">
 
       <div class="mb-3">
         <label class="form-label fw-semibold" for="nombre">
@@ -34,10 +34,10 @@ $this->load->view('crm/partials/head', array('titulo' => $titulo, 'body_class' =
 
       <div class="mb-3">
         <label class="form-label fw-semibold" for="telefono">
-          Teléfono <span class="text-muted small">(opcional)</span>
+          Teléfono <span class="text-danger">*</span>
         </label>
         <input type="tel" class="form-control form-control-lg" id="telefono" name="telefono"
-               maxlength="30" placeholder="Ej: 999 999 999">
+               required maxlength="30" placeholder="Ej: 999 999 999">
       </div>
 
       <div class="form-check mb-3">

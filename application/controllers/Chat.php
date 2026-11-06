@@ -3,17 +3,10 @@ defined('BASEPATH') OR exit('No direct script access allowed');
 
 /**
  * Chat público (cliente).
- *   GET  /chat                → formulario de bienvenida
- *   POST /chat/iniciar        → crea la conversación y guarda el token
- *   GET  /chat/conversacion   → interfaz de mensajería
- *   GET  /chat/mensajes       → AJAX: mensajes desde un id
- *   POST /chat/enviar         → AJAX: enviar texto
- *   POST /chat/subir_imagen   → AJAX: enviar imagen
+ * Identificación 100% por número de teléfono y token en URL (sin cookies).
  */
 class Chat extends MY_Controller
 {
-    const COOKIE_TOKEN = 'crm_chat_token';
-
     public function __construct()
     {
         parent::__construct();
@@ -34,16 +27,7 @@ class Chat extends MY_Controller
 
     public function index()
     {
-        // Si ya hay token válido, llevamos al cliente directo al chat
-        $token = $this->_leer_token();
-        if ($token) {
-            $conv = $this->crm_conversacion_model->obtener_por_token($token);
-            if ($conv) {
-                redirect('chat/conversacion');
-                return;
-            }
-        }
-
+        // Siempre mostrar el formulario. No hay redirección automática por cookies.
         $data = array(
             'texto_privacidad' => $this->cfg('texto_privacidad', 'Acepto el tratamiento de mis datos personales conforme a la Ley N° 29733.'),
             'csrf'             => $this->csrf_data(),
@@ -54,7 +38,7 @@ class Chat extends MY_Controller
     }
 
     /* =========================================================
-     *  CREAR CONVERSACIÓN
+     *  CREAR O RECUPERAR CONVERSACIÓN (POR TELÉFONO)
      * =======================================================*/
 
     public function iniciar()
@@ -67,14 +51,14 @@ class Chat extends MY_Controller
         // Honeypot: si viene relleno, es bot
         $honeypot = trim((string) $this->input->post('website'));
         if ($honeypot !== '') {
-            // Simulamos éxito y volvemos al formulario
             redirect('chat');
             return;
         }
 
         $this->load->library('form_validation');
         $this->form_validation->set_rules('nombre', 'Nombre', 'trim|required|min_length[2]|max_length[120]');
-        $this->form_validation->set_rules('telefono', 'Teléfono', 'trim|max_length[30]');
+        // Teléfono ahora es obligatorio para identificar al cliente
+        $this->form_validation->set_rules('telefono', 'Teléfono', 'trim|required|max_length[30]');
         $this->form_validation->set_rules('acepto_datos', 'Consentimiento', 'required');
 
         if ($this->form_validation->run() === FALSE) {
@@ -84,6 +68,7 @@ class Chat extends MY_Controller
         }
 
         $ip = $this->ip_cliente();
+        $telefono = trim((string)$this->input->post('telefono', TRUE));
 
         // Anti-spam: máximo de conversaciones por IP al día
         $max_conv_ip = 100;
@@ -93,87 +78,58 @@ class Chat extends MY_Controller
             return;
         }
 
-        // Mejora #2: si el cliente escribió teléfono y ya tiene una conversación
-        // reciente (< 24h) sin cerrar, la reutilizamos.
-        $telefono_post = trim((string)$this->input->post('telefono', TRUE));
-        if ($telefono_post !== '') {
-            $existente = $this->crm_conversacion_model->obtener_reciente_por_telefono($telefono_post, 24);
-            if ($existente) {
-                // Reutilizar la conversación existente: guardamos su token en cookie
-                $this->input->set_cookie(array(
-                    'name'     => self::COOKIE_TOKEN,
-                    'value'    => $existente['token'],
-                    'expire'   => 60 * 60 * 24 * 30,
-                    'httponly' => FALSE,
-                    'secure'   => (bool) config_item('cookie_secure'),
-                    'samesite' => 'Lax',
-                ));
-                $this->session->set_flashdata('crm_chat_token', $existente['token']);
-                $this->session->set_flashdata('ok', 'Recuperamos tu conversación anterior.');
-                redirect('chat/conversacion');
-                return;
-            }
+        // Buscar si ya existe una conversación activa con este teléfono.
+        // Pasamos NULL como segundo parámetro para ignorar el límite de horas (busca siempre).
+        $existente = $this->crm_conversacion_model->obtener_reciente_por_telefono($telefono, NULL);
+
+        if ($existente) {
+            // Si ya existe, recuperamos su token
+            $token = $existente['token'];
+        } else {
+            // Si no existe, creamos una nueva conversación
+            $res = $this->crm_conversacion_model->crear(array(
+                'nombre'       => $this->input->post('nombre', TRUE),
+                'telefono'     => $telefono,
+                'acepto_datos' => 1,
+                'ip'           => $ip,
+                'user_agent'   => $this->user_agent(),
+            ));
+            $token = $res['token'];
         }
 
-        $res = $this->crm_conversacion_model->crear(array(
-            'nombre'       => $this->input->post('nombre', TRUE),
-            'telefono'     => $telefono_post,
-            'acepto_datos' => 1,
-            'ip'           => $ip,
-            'user_agent'   => $this->user_agent(),
-        ));
-
-        // Guardar token en cookie (30 días) y ofrecerlo al JS vía
-        // flashdata para que también lo guarde en localStorage
-        $this->input->set_cookie(array(
-            'name'     => self::COOKIE_TOKEN,
-            'value'    => $res['token'],
-            'expire'   => 60 * 60 * 24 * 30,
-            'httponly' => FALSE,   // el JS también lo lee para respaldo
-            'secure'   => (bool) config_item('cookie_secure'),
-            'samesite' => 'Lax',
-        ));
-
-        $this->session->set_flashdata('crm_chat_token', $res['token']);
-
-        redirect('chat/conversacion');
+        // Redirigir pasando el token por la URL (No usamos cookies)
+        redirect('chat/conversacion/' . $token);
     }
 
     /* =========================================================
      *  INTERFAZ DE MENSAJERÍA
      * =======================================================*/
 
-    public function conversacion()
-{
-    $token = $this->_leer_token();
-    if (!$token) {
-        redirect('chat');
-        return;
+    public function conversacion($token = '')
+    {
+        // Validar que el token venga en la URL y tenga el largo correcto
+        if ($token === '' || strlen($token) !== 64) {
+            redirect('chat');
+            return;
+        }
+
+        $conv = $this->crm_conversacion_model->obtener_por_token($token);
+        if (!$conv) {
+            redirect('chat');
+            return;
+        }
+
+        $data = array(
+            'conversacion'  => $conv,
+            'token'         => $token,
+            'csrf'          => $this->csrf_data(),
+            'titulo'        => 'Conversación',
+            'poll_seg'      => $this->cfg_int('polling_cliente_seg', 4),
+            'max_largo_msj' => $this->cfg_int('max_largo_msj', 2000),
+        );
+
+        $this->load->view('crm/chat/conversacion', $data);
     }
-
-    $conv = $this->crm_conversacion_model->obtener_por_token($token);
-    if (!$conv) {
-        // Token inválido o conversación eliminada
-        $this->input->set_cookie(array(
-            'name'   => self::COOKIE_TOKEN,
-            'value'  => '',
-            'expire' => '',
-        ));
-        redirect('chat');
-        return;
-    }
-
-    $data = array(
-        'conversacion'  => $conv,
-        'token'         => $token,
-        'csrf'          => $this->csrf_data(),
-        'titulo'        => 'Conversación',
-        'poll_seg'      => $this->cfg_int('polling_cliente_seg', 4),
-        'max_largo_msj' => $this->cfg_int('max_largo_msj', 2000),  // ← esta línea falta
-    );
-
-    $this->load->view('crm/chat/conversacion', $data);
-}
 
     /* =========================================================
      *  AJAX: POLLING DE MENSAJES
@@ -268,7 +224,7 @@ class Chat extends MY_Controller
         $accion = $this->bot_service->procesar_mensaje($conv, $texto, 'texto', $es_primer);
         $this->_aplicar_accion_bot($conv, $accion);
 
-        // Recargar conversación (por si el bot cambió categoría o modo)
+        // Recargar conversación
         $conv2 = $this->crm_conversacion_model->obtener((int) $conv['id']);
 
         $nuevos = $this->crm_mensaje_model->listar((int) $conv['id'], (int) $msg_id - 1, 50);
@@ -353,13 +309,13 @@ class Chat extends MY_Controller
             return;
         }
 
-        // Redimensionar si supera el ancho máximo configurado
+        // Redimensionar
         $this->_redimensionar_si_necesario($destino, $ext);
 
-        // ¿Es el primer mensaje del cliente?
+        // ¿Es el primer mensaje?
         $es_primer = $this->crm_mensaje_model->contar_por_emisor((int) $conv['id'], 'cliente') === 0;
 
-        // Guardar el mensaje (tipo imagen, sin texto)
+        // Guardar el mensaje
         $msg_id = $this->crm_mensaje_model->crear((int) $conv['id'], 'cliente', 'imagen', NULL, $nombre);
         if (!$msg_id) {
             @unlink($destino);
@@ -367,7 +323,7 @@ class Chat extends MY_Controller
             return;
         }
 
-        // El bot recibe el mensaje como imagen sin texto
+        // Ejecutar bot
         $accion = $this->bot_service->procesar_mensaje($conv, '', 'imagen', $es_primer);
         $this->_aplicar_accion_bot($conv, $accion);
 
@@ -396,17 +352,13 @@ class Chat extends MY_Controller
      * =======================================================*/
 
     /**
-     * Lee el token desde POST, GET, cookie o sesión flashdata.
+     * Lee el token desde POST o GET. Ya NO lee cookies.
      */
     protected function _leer_token()
     {
         $t = $this->input->post('t', TRUE);
         if (!$t) $t = $this->input->get('t', TRUE);
-        if (!$t) $t = $this->input->cookie(self::COOKIE_TOKEN, TRUE);
-        if (!$t) {
-            $flash = $this->session->flashdata('crm_chat_token');
-            if ($flash) $t = $flash;
-        }
+        
         $t = is_string($t) ? trim($t) : '';
         return (strlen($t) === 64) ? $t : '';
     }
@@ -437,14 +389,13 @@ class Chat extends MY_Controller
         return $conv;
     }
 
-        /**
-     * Aplica las acciones devueltas por Bot_service (contrato v2).
+    /**
+     * Aplica las acciones devueltas por Bot_service.
      */
     protected function _aplicar_accion_bot(array $conv, array $accion)
     {
         $conv_id = (int) $conv['id'];
 
-        // Campos nuevos (secciones 4.3, 4.4, 4.6)
         if (!empty($accion['solicita_recurso'])) {
             $this->crm_conversacion_model->marcar_solicita_recurso($conv_id);
         }
@@ -458,7 +409,8 @@ class Chat extends MY_Controller
         if (!empty($accion['verificacion_estado']) && $accion['verificacion_estado'] === 'pendiente') {
             $this->crm_conversacion_model->marcar_verificacion_pendiente($conv_id);
         }
-                // Ficha automática (mejora #4)
+
+        // Ficha automática (mejora #4)
         if (!empty($accion['ficha']) && is_array($accion['ficha'])) {
             $this->crm_conversacion_model->actualizar_ficha($conv_id, $accion['ficha']);
         }
@@ -496,7 +448,6 @@ class Chat extends MY_Controller
                     );
                 }
             } else {
-                // Compatibilidad con el contrato v1
                 $this->crm_bot_log_model->registrar(
                     $conv_id,
                     isset($accion['tipo_respuesta']) ? $accion['tipo_respuesta'] : 'categoria',
@@ -504,8 +455,6 @@ class Chat extends MY_Controller
                 );
             }
         } else if (!empty($accion['no_responder'])) {
-            // El bot no tenía nada nuevo que decir y no responde para no
-            // spamear. Registramos el intento para no dejar "sin log".
             $this->crm_bot_log_model->registrar($conv_id, 'sin_respuesta_repetida', NULL);
         }
     }
@@ -521,7 +470,6 @@ class Chat extends MY_Controller
             finfo_close($finfo);
             return $mime;
         }
-        // Fallback si no hay finfo
         if (function_exists('mime_content_type')) {
             return mime_content_type($archivo);
         }
@@ -530,7 +478,6 @@ class Chat extends MY_Controller
 
     /**
      * Redimensiona la imagen si supera el ancho configurado.
-     * Mantiene proporción. Si no hay GD, no hace nada.
      */
     protected function _redimensionar_si_necesario($ruta, $ext)
     {
@@ -557,12 +504,10 @@ class Chat extends MY_Controller
             'quality'        => '82%',
         );
         if ($ext === 'png') {
-            // PNG no usa quality como JPEG; igual, image_lib lo maneja
             $config['quality'] = '82%';
         }
         $this->image_lib->initialize($config);
         if (!$this->image_lib->resize()) {
-            // Si falla, no rompemos la subida; log interno
             log_message('error', 'image_lib resize: ' . $this->image_lib->display_errors('', ''));
         }
         $this->image_lib->clear();

@@ -70,3 +70,4 @@ $route['crm/api/recursos_admin_exportar_csv']       = 'crm_api/recursos_admin_ex
 $route['crm/api/rr_listar']        = 'crm_api/rr_listar';
 $route['crm/api/rr_guardar']       = 'crm_api/rr_guardar';
 $route['crm/api/rr_eliminar']      = 'crm_api/rr_eliminar';
+$route['chat/conversacion/(:any)'] = 'chat/conversacion/$1';
