@@ -11,6 +11,10 @@
   if (!app) return;
 
   var token    = app.dataset.token;
+
+  // Guardamos el token en este navegador: así, si el cliente vuelve a entrar con el mismo
+  // teléfono, retoma SU conversación (el teléfono solo ya no da acceso a ningún historial).
+  try { window.localStorage.setItem('crm_chat_token', token); } catch (e) { /* modo privado */ }
   var pollSeg  = parseInt(app.dataset.poll || '4', 10);
   var maxLargo = parseInt(app.dataset.max || '2000', 10);
 
@@ -71,6 +75,30 @@
     return (s === null || s === undefined) ? '' : String(s);
   }
 
+  // Escribe el texto en el elemento y convierte las URLs http(s) en enlaces clicables
+  // (mapa de ubicación, drivers y videos). Usa nodos DOM, nunca innerHTML (sin riesgo XSS).
+  function rellenarTexto(el, texto) {
+    var re = /https?:\/\/[^\s<>"']+/gi;
+    var ultimo = 0, m;
+    while ((m = re.exec(texto)) !== null) {
+      var url = m[0].replace(/[.,;:!?)\]]+$/, '');   // sin la puntuación final
+      if (m.index > ultimo) {
+        el.appendChild(document.createTextNode(texto.slice(ultimo, m.index)));
+      }
+      var a = document.createElement('a');
+      a.href = url;
+      a.target = '_blank';
+      a.rel = 'noopener noreferrer';
+      a.textContent = url;
+      el.appendChild(a);
+      ultimo = m.index + url.length;
+      re.lastIndex = ultimo;
+    }
+    if (ultimo < texto.length) {
+      el.appendChild(document.createTextNode(texto.slice(ultimo)));
+    }
+  }
+
   // ============ render ============
 
   function burbuja(m) {
@@ -100,7 +128,7 @@
     if (m.texto) {
       var t = document.createElement('div');
       t.className = 'chat-msg-texto';
-      t.textContent = m.texto;
+      rellenarTexto(t, String(m.texto));
       wrap.appendChild(t);
     }
 
@@ -141,7 +169,11 @@
         if (d.ultimo_id > ultimoId) ultimoId = d.ultimo_id;
       }
       if (estadoEl) {
-        estadoEl.textContent = (d.modo === 'humano') ? 'Un asesor te atiende' : 'Bot activo';
+        if (d.estado === 'cerrada') {
+          estadoEl.textContent = 'Conversación cerrada (escribe para reabrirla)';
+        } else {
+          estadoEl.textContent = (d.modo === 'humano') ? 'Un asesor te atiende' : 'Bot activo';
+        }
       }
     }).catch(function () {
       cargando = false;

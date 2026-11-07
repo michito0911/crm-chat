@@ -83,14 +83,11 @@ class MY_Controller extends CI_Controller
      */
     protected function ip_cliente()
     {
-        if (!empty($_SERVER['HTTP_CF_CONNECTING_IP'])) {
-            return $_SERVER['HTTP_CF_CONNECTING_IP'];
-        }
-        if (!empty($_SERVER['HTTP_X_FORWARDED_FOR'])) {
-            $parts = explode(',', $_SERVER['HTTP_X_FORWARDED_FOR']);
-            return trim($parts[0]);
-        }
-        return isset($_SERVER['REMOTE_ADDR']) ? $_SERVER['REMOTE_ADDR'] : '0.0.0.0';
+        // IP real de la conexión. CodeIgniter solo confía en X-Forwarded-For si la IP del
+        // proxy está en $config['proxy_ips']. Antes se aceptaba cualquier cabecera enviada
+        // por el cliente, así que el límite anti-spam por IP se saltaba con solo cambiarla.
+        $ip = $this->input->ip_address();
+        return $ip ? $ip : '0.0.0.0';
     }
 
     protected function user_agent()

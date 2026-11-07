@@ -42,6 +42,28 @@ class Crm_etiqueta_model extends CI_Model
     }
 
     /**
+     * Agrega (o actualiza al puntaje mayor) etiquetas secundarias SIN borrar las anteriores.
+     * $etiquetas = [ ['categoria_id'=>X,'puntaje'=>Y], ... ]
+     */
+    public function agregar($conversacion_id, array $etiquetas)
+    {
+        $conv_id = (int) $conversacion_id;
+        $ahora   = date('Y-m-d H:i:s');
+        $sql = 'INSERT INTO crm_etiquetas_conversacion (conversacion_id, categoria_id, puntaje, creado_at) '
+             . 'VALUES (?, ?, ?, ?) '
+             . 'ON DUPLICATE KEY UPDATE puntaje = GREATEST(puntaje, VALUES(puntaje))';
+        foreach ($etiquetas as $e) {
+            if (empty($e['categoria_id'])) continue;
+            $this->db->query($sql, array(
+                $conv_id,
+                (int) $e['categoria_id'],
+                isset($e['puntaje']) ? (int) $e['puntaje'] : 0,
+                $ahora,
+            ));
+        }
+    }
+
+    /**
      * Lista de etiquetas con nombre y color de categoría.
      */
     public function listar_por_conversacion($conversacion_id)

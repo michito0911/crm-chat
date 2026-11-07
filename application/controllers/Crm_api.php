@@ -309,7 +309,11 @@ class Crm_api extends Crm_admin_base
             return $this->json_error('Conversación no encontrada.', 404);
         }
 
+        $conv_prev = $this->crm_conversacion_model->obtener($id);
         $this->crm_conversacion_model->cambiar_estado($id, $estado);
+        if ($estado === 'cerrada' && $conv_prev) {
+            $this->_solicitar_csat_si_corresponde($conv_prev);
+        }
         $this->json_ok(array('estado' => $estado));
     }
 
@@ -667,6 +671,10 @@ class Crm_api extends Crm_admin_base
             'max_img_mb', 'img_ancho_max', 'max_largo_msj',
             'polling_cliente_seg', 'polling_admin_seg',
             'sonido_admin', 'bot_repetir_min',
+            'texto_acuse_breve', 'texto_acuse_numerico', 'texto_comprobante_recibido',
+            'texto_equipo_registrado', 'texto_recurso_verificado', 'texto_solicitud_recursos',
+            'texto_urgencia_respuesta', 'texto_envio_recursos', 'texto_imagen_ctx',
+            'texto_csat_pregunta', 'texto_csat_gracias', 'csat_activo',
         );
 
         $pares = array();
@@ -700,6 +708,33 @@ class Crm_api extends Crm_admin_base
     /* =========================================================
      *  INTERNOS
      * =======================================================*/
+
+    /**
+     * Al CERRAR una conversación, el bot pide la calificación (1 a 5) si csat_activo = 1,
+     * si todavía no se pidió y si un asesor llegó a atender al cliente.
+     */
+    protected function _solicitar_csat_si_corresponde(array $conv)
+    {
+        if ($this->cfg_int('csat_activo', 0) !== 1) {
+            return;
+        }
+        if ($conv['estado'] === 'cerrada') {
+            return; // ya estaba cerrada
+        }
+        if (!empty($conv['csat_solicitado']) || !empty($conv['csat'])) {
+            return;
+        }
+        $id = (int) $conv['id'];
+        if ($this->crm_mensaje_model->contar_por_emisor($id, 'admin') === 0) {
+            return; // nadie lo atendió: no tiene sentido calificar
+        }
+        $texto = (string) $this->cfg(
+            'texto_csat_pregunta',
+            'Antes de cerrar: del 1 al 5, ¿cómo calificas la atención que recibiste? (5 = excelente, 1 = muy mala)'
+        );
+        $this->crm_mensaje_model->crear($id, 'bot', 'texto', $texto, NULL);
+        $this->crm_conversacion_model->marcar_csat_solicitado($id);
+    }
 
     protected function _formatear_mensaje(array $m, $token)
     {
@@ -998,6 +1033,8 @@ class Crm_api extends Crm_admin_base
 
         // Registrar cada envío
         $this->load->model('crm_recurso_envio_model');
+        // Ya se entregó el material: la conversación deja de estar "solicitando recurso"
+        $this->crm_conversacion_model->resetear_solicita_recurso($id);
         $this->crm_recurso_envio_model->registrar_lote(
             $id,
             $msg_id,

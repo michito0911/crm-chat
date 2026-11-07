@@ -196,6 +196,8 @@ class Crm_conversacion_model extends CI_Model
 
     protected function _aplicar_filtros($filtros)
     {
+        // Ocultamos conversaciones "fantasma" (llenaron el formulario pero no escribieron nada)
+        $this->db->where('EXISTS (SELECT 1 FROM crm_mensajes mx WHERE mx.conversacion_id = c.id)', NULL, FALSE);
         if (!empty($filtros['categoria_id'])) {
             $this->db->where('c.categoria_id', (int) $filtros['categoria_id']);
         }
@@ -239,6 +241,7 @@ class Crm_conversacion_model extends CI_Model
         $res = array('abierta' => 0, 'en_atencion' => 0, 'cerrada' => 0);
         $rows = $this->db
             ->select('estado, COUNT(*) AS total')
+            ->where('EXISTS (SELECT 1 FROM crm_mensajes mx WHERE mx.conversacion_id = crm_conversaciones.id)', NULL, FALSE)
             ->group_by('estado')
             ->get($this->tabla)
             ->result_array();
@@ -390,5 +393,51 @@ class Crm_conversacion_model extends CI_Model
                         ->limit(1)
                         ->get($this->tabla)
                         ->row_array();
+    }
+
+    /**
+     * Quita la marca "solicita recurso" (ya se enviaron los recursos). Sin esto la marca
+     * quedaba en 1 para siempre y toda imagen posterior se tomaba como comprobante.
+     */
+    public function resetear_solicita_recurso($id)
+    {
+        $this->db
+            ->where('id', (int) $id)
+            ->update($this->tabla, array('solicita_recurso' => 0));
+    }
+
+    /**
+     * Marca que ya se pidió la encuesta de satisfacción (CSAT).
+     */
+    public function marcar_csat_solicitado($id)
+    {
+        $this->db
+            ->where('id', (int) $id)
+            ->update($this->tabla, array('csat_solicitado' => 1));
+    }
+
+    /**
+     * Guarda la calificación (1 a 5) y un comentario opcional.
+     */
+    public function registrar_csat($id, $nota, $comentario = '')
+    {
+        $nota = (int) $nota;
+        if ($nota < 1 || $nota > 5) {
+            return FALSE;
+        }
+        $comentario = trim((string) $comentario);
+        if (function_exists('mb_substr')) {
+            $comentario = mb_substr($comentario, 0, 255, 'UTF-8');
+        } else {
+            $comentario = substr($comentario, 0, 255);
+        }
+        $this->db
+            ->where('id', (int) $id)
+            ->update($this->tabla, array(
+                'csat'            => $nota,
+                'csat_at'         => date('Y-m-d H:i:s'),
+                'csat_comentario' => ($comentario !== '') ? $comentario : NULL,
+            ));
+        return TRUE;
     }
 }

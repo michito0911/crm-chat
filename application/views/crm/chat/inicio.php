@@ -23,6 +23,8 @@ $this->load->view('crm/partials/head', array('titulo' => $titulo, 'body_class' =
 
     <form method="post" action="<?= site_url('chat/iniciar') ?>" autocomplete="off" novalidate>
       <input type="hidden" name="<?= crm_esc($csrf['csrf_name']) ?>" value="<?= crm_esc($csrf['csrf_hash']) ?>">
+      <!-- Token de la conversación guardado en este navegador (lo rellena inicio.js) -->
+      <input type="hidden" name="t" id="inicio-token" value="">
 
       <div class="mb-3">
         <label class="form-label fw-semibold" for="nombre">
@@ -60,9 +62,9 @@ $this->load->view('crm/partials/head', array('titulo' => $titulo, 'body_class' =
     </form>
 
     <p class="text-center text-muted small mt-3 mb-0">
-      Horario de atención: lunes a sábado, 10:00 a 16:00.
+      Horario de atención: <?= crm_esc($texto_horario) ?>.
     </p>
   </div>
 </div>
 
-<?php $this->load->view('crm/partials/pie', array('csrf' => $csrf)); ?>
+<?php $this->load->view('crm/partials/pie', array('csrf' => $csrf, 'scripts_extra' => array('inicio.js'))); ?>

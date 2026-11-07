@@ -1,10 +1,12 @@
-<FilesMatch "\.(php|php3|php4|php5|php7|phtml|pl|py|jsp|asp|htm|html|shtml|sh|cgi)$">
+# Las imagenes NO se sirven directamente: se entregan por /crm/media/ (Crm_media),
+# que valida la sesion del admin o el token de la conversacion.
+<IfModule mod_authz_core.c>
     Require all denied
-</FilesMatch>
-
-<FilesMatch "\.(jpg|jpeg|png|webp|gif)$">
-    Require all granted
-</FilesMatch>
+</IfModule>
+<IfModule !mod_authz_core.c>
+    Order deny,allow
+    Deny from all
+</IfModule>
 
 <IfModule mod_php.c>
     php_flag engine off

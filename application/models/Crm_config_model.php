@@ -61,7 +61,8 @@ class Crm_config_model extends CI_Model
             $this->db->insert($this->tabla, array(
                 'clave'     => $clave,
                 'valor'     => $valor,
-                'creado_at' => date('Y-m-d H:i:s'),
+                // crm_configuracion no tiene columna creado_at (tiene actualizado_at, automática):
+                // con 'creado_at' el INSERT de una clave nueva fallaba.
             ));
         }
         // Invalida caché local

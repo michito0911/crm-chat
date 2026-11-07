@@ -49,6 +49,8 @@ $route['crm/api/respuestas_eliminar']  = 'crm_api/respuestas_eliminar';
 $route['crm/api/configuracion']        = 'crm_api/configuracion';
 
 /* --- Imágenes protegidas --- */
+// Sin esta ruta, las URLs /crm/media/... (que genera crm_archivo_url) daban 404 y no se veía ninguna imagen
+$route['crm/media/(:any)']             = 'crm_media/ver/$1';
 $route['crm/api/enviar_imagen/(:num)'] = 'crm_api/enviar_imagen/$1';
 
 $route['crm/api/verificar/(:num)']            = 'crm_api/verificar/$1';

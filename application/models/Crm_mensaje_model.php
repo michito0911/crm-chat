@@ -137,7 +137,7 @@ class Crm_mensaje_model extends CI_Model
     {
         $desde = date('Y-m-d H:i:s', time() - 3600);
         return (int) $this->db
-            ->where('c.creado_at >=', $desde)
+            ->where('m.creado_at >=', $desde)   // antes usaba c.creado_at (fecha de la conversación)
             ->where('m.emisor', 'cliente')
             ->where('c.ip', $ip)
             ->from('crm_mensajes m')

@@ -32,6 +32,8 @@ class Chat extends MY_Controller
             'texto_privacidad' => $this->cfg('texto_privacidad', 'Acepto el tratamiento de mis datos personales conforme a la Ley N° 29733.'),
             'csrf'             => $this->csrf_data(),
             'titulo'           => 'Chat de atención',
+            // El horario se toma de la configuración (antes estaba fijo en la vista: "10:00 a 16:00")
+            'texto_horario'    => $this->bot_service->texto_horario(),
         );
 
         $this->load->view('crm/chat/inicio', $data);
@@ -82,8 +84,15 @@ class Chat extends MY_Controller
         // Pasamos NULL como segundo parámetro para ignorar el límite de horas (busca siempre).
         $existente = $this->crm_conversacion_model->obtener_reciente_por_telefono($telefono, NULL);
 
-        if ($existente) {
-            // Si ya existe, recuperamos su token
+        // SEGURIDAD: el teléfono por sí solo NO basta para entrar a una conversación
+        // (cualquiera que conozca un número vería su historial, DNI y comprobantes).
+        // Solo se retoma si este mismo navegador guardó el token de esa conversación.
+        $token_previo = $this->input->post('t', TRUE);
+        $token_previo = is_string($token_previo) ? trim($token_previo) : '';
+
+        if ($existente && strlen($token_previo) === 64
+            && hash_equals((string) $existente['token'], $token_previo)) {
+            // Es el mismo navegador de siempre: retomamos su conversación
             $token = $existente['token'];
         } else {
             // Si no existe, creamos una nueva conversación
@@ -210,6 +219,12 @@ class Chat extends MY_Controller
             return;
         }
 
+        // Límite total de mensajes del cliente en la conversación (config max_mensajes_conversacion)
+        if ($this->_limite_total_superado($conv)) {
+            $this->json_error('Esta conversación alcanzó el máximo de mensajes permitido.', 429);
+            return;
+        }
+
         // ¿Es el primer mensaje del cliente en esta conversación?
         $es_primer = $this->crm_mensaje_model->contar_por_emisor((int) $conv['id'], 'cliente') === 0;
 
@@ -220,9 +235,13 @@ class Chat extends MY_Controller
             return;
         }
 
-        // Ejecutar el bot
-        $accion = $this->bot_service->procesar_mensaje($conv, $texto, 'texto', $es_primer);
-        $this->_aplicar_accion_bot($conv, $accion);
+        // ¿Es la respuesta (1 a 5) a la encuesta de satisfacción? Entonces no corre el bot.
+        if (!$this->_procesar_csat($conv, $texto)) {
+            // Si el cliente escribe en una conversación cerrada, la reabrimos
+            $conv = $this->_reabrir_si_cerrada($conv);
+            $accion = $this->bot_service->procesar_mensaje($conv, $texto, 'texto', $es_primer);
+            $this->_aplicar_accion_bot($conv, $accion);
+        }
 
         // Recargar conversación
         $conv2 = $this->crm_conversacion_model->obtener((int) $conv['id']);
@@ -267,6 +286,11 @@ class Chat extends MY_Controller
         $max_hora_conv = $this->cfg_int('max_msj_hora_conv', 30);
         if ($this->crm_mensaje_model->contar_cliente_ultima_hora_conv((int) $conv['id']) >= $max_hora_conv) {
             $this->json_error('Has enviado demasiados mensajes en poco tiempo. Espera un momento.', 429);
+            return;
+        }
+
+        if ($this->_limite_total_superado($conv)) {
+            $this->json_error('Esta conversación alcanzó el máximo de mensajes permitido.', 429);
             return;
         }
 
@@ -323,7 +347,8 @@ class Chat extends MY_Controller
             return;
         }
 
-        // Ejecutar bot
+        // Ejecutar bot (si la conversación estaba cerrada, se reabre)
+        $conv = $this->_reabrir_si_cerrada($conv);
         $accion = $this->bot_service->procesar_mensaje($conv, '', 'imagen', $es_primer);
         $this->_aplicar_accion_bot($conv, $accion);
 
@@ -425,9 +450,10 @@ class Chat extends MY_Controller
             $this->crm_conversacion_model->cambiar_categoria_bot($conv_id, $accion['categoria_id']);
         }
 
-        // Etiquetas secundarias
-        if (isset($accion['etiquetas'])) {
-            $this->crm_etiqueta_model->reemplazar($conv_id, $accion['etiquetas']);
+        // Etiquetas secundarias. Se ACUMULAN: antes se borraban con cualquier mensaje sin
+        // categoría (imagen, "okey", "1"...), por eso la tabla quedaba siempre vacía.
+        if (!empty($accion['etiquetas'])) {
+            $this->crm_etiqueta_model->agregar($conv_id, $accion['etiquetas']);
         }
 
         // Pendiente de revisión
@@ -457,6 +483,63 @@ class Chat extends MY_Controller
         } else if (!empty($accion['no_responder'])) {
             $this->crm_bot_log_model->registrar($conv_id, 'sin_respuesta_repetida', NULL);
         }
+    }
+
+    /**
+     * Si el cliente escribe en una conversación cerrada, la reabre (modo bot)
+     * y la deja pendiente para que un asesor la vea. Devuelve la conversación actualizada.
+     */
+    protected function _reabrir_si_cerrada(array $conv)
+    {
+        if (isset($conv['estado']) && $conv['estado'] === 'cerrada') {
+            $id = (int) $conv['id'];
+            $this->crm_conversacion_model->cambiar_estado($id, 'abierta');
+            $this->crm_conversacion_model->cambiar_modo($id, 'bot');
+            $this->crm_conversacion_model->marcar_pendiente_revision($id, TRUE);
+            $conv['estado'] = 'abierta';
+            $conv['modo']   = 'bot';
+        }
+        return $conv;
+    }
+
+    /**
+     * Anti-spam: máximo de mensajes del cliente por conversación (max_mensajes_conversacion).
+     */
+    protected function _limite_total_superado(array $conv)
+    {
+        $max = $this->cfg_int('max_mensajes_conversacion', 0);
+        if ($max <= 0) {
+            return FALSE;
+        }
+        return $this->crm_mensaje_model->contar_por_emisor((int) $conv['id'], 'cliente') >= $max;
+    }
+
+    /**
+     * Encuesta de satisfacción: si se pidió al cerrar y el cliente responde 1 a 5,
+     * se registra la nota (y un comentario opcional) y se agradece. Devuelve TRUE si
+     * el mensaje era la respuesta a la encuesta.
+     */
+    protected function _procesar_csat(array $conv, $texto)
+    {
+        if (empty($conv['csat_solicitado']) || !empty($conv['csat'])) {
+            return FALSE;
+        }
+        if (!isset($conv['estado']) || $conv['estado'] !== 'cerrada') {
+            return FALSE;
+        }
+        if (!preg_match('/^\s*([1-5])(?!\d)[\s\.\)\-:,]*(.*)$/su', (string) $texto, $m)) {
+            return FALSE;
+        }
+        $id = (int) $conv['id'];
+        $this->crm_conversacion_model->registrar_csat($id, (int) $m[1], trim($m[2]));
+
+        $gracias = (string) $this->cfg(
+            'texto_csat_gracias',
+            '¡Gracias por tu calificación! Tu opinión nos ayuda a mejorar.'
+        );
+        $this->crm_mensaje_model->crear($id, 'bot', 'texto', $gracias, NULL);
+        $this->crm_bot_log_model->registrar($id, 'csat', NULL);
+        return TRUE;
     }
 
     /**
